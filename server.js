@@ -24,11 +24,36 @@ const players = new Map();
 const rooms = new Map();
 
 const MAX_PLAYERS = 4;
+const CARDS_PER_PLAYER = 5;
+const DICE_VALUES = [1, 2, 3, 4, 5, 6];
+
+// Function to shuffle an array
+function shuffleArray(array) {
+    for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+    }
+    return array;
+}
+
+// Create a deck of 24 cards (4 of each value)
+function createDeck() {
+    let deck = [];
+    for (let value of DICE_VALUES) {
+        for (let i = 0; i < 4; i++) {
+            deck.push(value);
+        }
+    }
+    return shuffleArray(deck);
+}
+
 const createRoom = (roomId) => {
     return {
         players: new Set(),
         currentTurn: null,
-        gameStarted: false
+        gameStarted: false,
+        deck: [],
+        playerHands: new Map()
     };
 };
 
@@ -72,6 +97,22 @@ io.on('connection', (socket) => {
         if (room.players.size === MAX_PLAYERS && !room.gameStarted) {
             room.gameStarted = true;
             room.currentTurn = Array.from(room.players)[0];
+            
+            // Deal cards
+            room.deck = createDeck();
+            let currentCard = 0;
+            
+            Array.from(room.players).forEach(playerId => {
+                const playerHand = room.deck.slice(currentCard, currentCard + CARDS_PER_PLAYER);
+                room.playerHands.set(playerId, playerHand);
+                currentCard += CARDS_PER_PLAYER;
+                
+                // Send private hand to each player
+                io.to(playerId).emit('dealtHand', {
+                    hand: playerHand
+                });
+            });
+
             io.to(roomId).emit('gameStart', {
                 players: Array.from(room.players).map(id => ({
                     id,
@@ -123,12 +164,46 @@ io.on('connection', (socket) => {
         const room = rooms.get(player.room);
         if (!room || !room.gameStarted) return;
 
-        io.to(player.room).emit('liarCalled', {
-            player: player.name
+        // Count total dice of the last called value
+        const lastCall = data.lastCall;
+        let totalCount = 0;
+        room.playerHands.forEach(hand => {
+            totalCount += hand.filter(value => value === lastCall.value).length;
         });
 
-        // Reset turn after liar is called
-        room.currentTurn = socket.id;
+        const wasLying = totalCount < lastCall.quantity;
+        const losingPlayer = wasLying ? lastCall.player : player.name;
+
+        io.to(player.room).emit('liarCalled', {
+            caller: player.name,
+            wasLying,
+            losingPlayer,
+            actualCount: totalCount,
+            allHands: Array.from(room.playerHands.entries()).map(([playerId, hand]) => ({
+                player: players.get(playerId).name,
+                hand
+            }))
+        });
+
+        // Start new round
+        room.deck = createDeck();
+        let currentCard = 0;
+        
+        Array.from(room.players).forEach(playerId => {
+            const playerHand = room.deck.slice(currentCard, currentCard + CARDS_PER_PLAYER);
+            room.playerHands.set(playerId, playerHand);
+            currentCard += CARDS_PER_PLAYER;
+            
+            io.to(playerId).emit('dealtHand', {
+                hand: playerHand
+            });
+        });
+
+        // Reset turn to losing player
+        const losingPlayerId = Array.from(room.players).find(id => 
+            players.get(id).name === losingPlayer
+        );
+        room.currentTurn = losingPlayerId;
         io.to(player.room).emit('nextTurn', { playerId: room.currentTurn });
     });
 
@@ -138,6 +213,7 @@ io.on('connection', (socket) => {
             const room = rooms.get(player.room);
             if (room) {
                 room.players.delete(socket.id);
+                room.playerHands.delete(socket.id);
                 
                 // Notify remaining players
                 io.to(player.room).emit('playerLeft', {

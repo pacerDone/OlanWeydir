@@ -65,6 +65,29 @@
             color: #4CAF50;
             font-weight: bold;
         }
+        .player-hand {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #e8f5e9;
+            border-radius: 4px;
+        }
+        .card {
+            display: inline-block;
+            width: 40px;
+            height: 60px;
+            margin: 0 5px;
+            background-color: white;
+            border: 2px solid #4CAF50;
+            border-radius: 4px;
+            text-align: center;
+            line-height: 60px;
+            font-size: 24px;
+            font-weight: bold;
+        }
+        .last-call {
+            margin-top: 10px;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -80,10 +103,18 @@
 
         <div id="game-section" style="display: none;">
             <div id="waiting-message">Waiting for players... (<span id="player-count">1</span>/4)</div>
+            
+            <div id="player-hand" class="player-hand">
+                <h3>Your Cards:</h3>
+                <div id="cards"></div>
+            </div>
+
             <div id="player-list" class="player-list">
                 <h3>Players:</h3>
                 <div id="players"></div>
             </div>
+
+            <div class="last-call" id="lastCall"></div>
 
             <div class="controls">
                 <input type="number" id="quantity" placeholder="Quantity" min="1">
@@ -101,10 +132,22 @@
         const socket = io();
         let playerId = null;
         let isMyTurn = false;
+        let lastCall = null;
 
         // Sanitize input
         function sanitizeInput(str) {
             return str.replace(/[<>]/g, '').slice(0, 20);
+        }
+
+        function updateHand(hand) {
+            const cardsDiv = document.getElementById('cards');
+            cardsDiv.innerHTML = '';
+            hand.sort((a, b) => a - b).forEach(card => {
+                const cardDiv = document.createElement('div');
+                cardDiv.className = 'card';
+                cardDiv.textContent = card;
+                cardsDiv.appendChild(cardDiv);
+            });
         }
 
         function joinGame() {
@@ -139,6 +182,12 @@
                     return;
                 }
 
+                lastCall = {
+                    player: document.getElementById('playerName').value.trim(),
+                    quantity: quantityNum,
+                    value: valueNum
+                };
+
                 socket.emit('makeCall', {
                     quantity: quantityNum,
                     value: valueNum
@@ -147,8 +196,8 @@
         }
 
         function callLiar() {
-            if (!isMyTurn) return;
-            socket.emit('callLiar', {});
+            if (!isMyTurn || !lastCall) return;
+            socket.emit('callLiar', { lastCall });
         }
 
         function addToLog(message) {
@@ -185,6 +234,10 @@
             addToLog(`${data.name} joined the game`);
         });
 
+        socket.on('dealtHand', (data) => {
+            updateHand(data.hand);
+        });
+
         socket.on('playerLeft', (data) => {
             document.getElementById('player-count').textContent = data.playerCount;
             addToLog(`${data.name} left the game`);
@@ -213,11 +266,24 @@
         });
 
         socket.on('callMade', (data) => {
+            lastCall = data;
+            document.getElementById('lastCall').textContent = 
+                `Last Call: ${data.player} called ${data.quantity} ${data.value}'s`;
             addToLog(`${data.player} calls: ${data.quantity} ${data.value}'s`);
         });
 
         socket.on('liarCalled', (data) => {
-            addToLog(`${data.player} calls LIAR!`);
+            const result = data.wasLying ? 'was lying!' : 'was telling the truth!';
+            addToLog(`${data.caller} called LIAR! ${data.losingPlayer} ${result}`);
+            addToLog(`Actual count of ${lastCall.value}'s: ${data.actualCount}`);
+            
+            // Show all hands
+            data.allHands.forEach(playerHand => {
+                addToLog(`${playerHand.player}'s hand: ${playerHand.hand.join(', ')}`);
+            });
+            
+            lastCall = null;
+            document.getElementById('lastCall').textContent = '';
         });
     </script>
 </body>
