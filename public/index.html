@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Liar's Deck Game</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        .game-container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .controls {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        button:hover:not(:disabled) {
+            background-color: #45a049;
+        }
+        input {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .game-log {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f8f8f8;
+            border-radius: 4px;
+            height: 200px;
+            overflow-y: auto;
+        }
+        .player-list {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f8f8f8;
+            border-radius: 4px;
+        }
+        .error {
+            color: red;
+            margin-top: 10px;
+        }
+        .current-turn {
+            color: #4CAF50;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="game-container">
+        <h1>Liar's Deck Game</h1>
+        
+        <div id="join-section">
+            <input type="text" id="playerName" placeholder="Enter your name" maxlength="20">
+            <input type="text" id="roomId" placeholder="Room ID (optional)" maxlength="20">
+            <button onclick="joinGame()">Join Game</button>
+            <div id="joinError" class="error"></div>
+        </div>
+
+        <div id="game-section" style="display: none;">
+            <div id="waiting-message">Waiting for players... (<span id="player-count">1</span>/4)</div>
+            <div id="player-list" class="player-list">
+                <h3>Players:</h3>
+                <div id="players"></div>
+            </div>
+
+            <div class="controls">
+                <input type="number" id="quantity" placeholder="Quantity" min="1">
+                <input type="number" id="value" placeholder="Value" min="1" max="6">
+                <button id="makeCallBtn" onclick="makeCall()" disabled>Make Call</button>
+                <button id="callLiarBtn" onclick="callLiar()" disabled>Call Liar!</button>
+            </div>
+
+            <div class="game-log" id="gameLog"></div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let playerId = null;
+        let isMyTurn = false;
+
+        // Sanitize input
+        function sanitizeInput(str) {
+            return str.replace(/[<>]/g, '').slice(0, 20);
+        }
+
+        function joinGame() {
+            const playerNameInput = document.getElementById('playerName');
+            const roomIdInput = document.getElementById('roomId');
+            const playerName = sanitizeInput(playerNameInput.value.trim());
+            const roomId = sanitizeInput(roomIdInput.value.trim());
+
+            if (!playerName) {
+                document.getElementById('joinError').textContent = 'Please enter a name';
+                return;
+            }
+
+            socket.emit('joinGame', { 
+                playerName, 
+                roomId: roomId || 'default'
+            });
+        }
+
+        function makeCall() {
+            if (!isMyTurn) return;
+
+            const quantity = document.getElementById('quantity').value;
+            const value = document.getElementById('value').value;
+            
+            if (quantity && value) {
+                const quantityNum = parseInt(quantity);
+                const valueNum = parseInt(value);
+                
+                if (quantityNum < 1 || valueNum < 1 || valueNum > 6) {
+                    addToLog('Invalid input values');
+                    return;
+                }
+
+                socket.emit('makeCall', {
+                    quantity: quantityNum,
+                    value: valueNum
+                });
+            }
+        }
+
+        function callLiar() {
+            if (!isMyTurn) return;
+            socket.emit('callLiar', {});
+        }
+
+        function addToLog(message) {
+            const gameLog = document.getElementById('gameLog');
+            const entry = document.createElement('div');
+            entry.textContent = message;
+            gameLog.appendChild(entry);
+            gameLog.scrollTop = gameLog.scrollHeight;
+        }
+
+        function updatePlayerList(players, currentTurn) {
+            const playerList = document.getElementById('players');
+            playerList.innerHTML = '';
+            players.forEach(player => {
+                const div = document.createElement('div');
+                div.textContent = player.name;
+                if (player.id === currentTurn) {
+                    div.classList.add('current-turn');
+                }
+                playerList.appendChild(div);
+            });
+        }
+
+        // Socket event handlers
+        socket.on('error', (data) => {
+            document.getElementById('joinError').textContent = data.message;
+        });
+
+        socket.on('playerJoined', (data) => {
+            playerId = data.id;
+            document.getElementById('join-section').style.display = 'none';
+            document.getElementById('game-section').style.display = 'block';
+            document.getElementById('player-count').textContent = data.playerCount;
+            addToLog(`${data.name} joined the game`);
+        });
+
+        socket.on('playerLeft', (data) => {
+            document.getElementById('player-count').textContent = data.playerCount;
+            addToLog(`${data.name} left the game`);
+        });
+
+        socket.on('gameStart', (data) => {
+            document.getElementById('waiting-message').style.display = 'none';
+            updatePlayerList(data.players, data.currentTurn);
+            addToLog('Game started!');
+            isMyTurn = (data.currentTurn === playerId);
+            document.getElementById('makeCallBtn').disabled = !isMyTurn;
+            document.getElementById('callLiarBtn').disabled = !isMyTurn;
+        });
+
+        socket.on('nextTurn', (data) => {
+            isMyTurn = (data.playerId === playerId);
+            document.getElementById('makeCallBtn').disabled = !isMyTurn;
+            document.getElementById('callLiarBtn').disabled = !isMyTurn;
+            const playerList = document.getElementById('players');
+            Array.from(playerList.children).forEach(div => {
+                div.classList.remove('current-turn');
+                if (div.dataset.playerId === data.playerId) {
+                    div.classList.add('current-turn');
+                }
+            });
+        });
+
+        socket.on('callMade', (data) => {
+            addToLog(`${data.player} calls: ${data.quantity} ${data.value}'s`);
+        });
+
+        socket.on('liarCalled', (data) => {
+            addToLog(`${data.player} calls LIAR!`);
+        });
+    </script>
+</body>
+</html> 

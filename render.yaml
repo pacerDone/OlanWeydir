@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: liars-deck
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    runtime: node
+    nodeVersion: 18.x 
